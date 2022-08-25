@@ -14,9 +14,13 @@ trap cleanup_and_killall INT TERM EXIT
 
 # Format log entries - includes timestamp on each line
 # Entries should contain their own newline, if necessary
+# Format of the timestamp includes microseconds:
+# e.g., 2022-08-24:21:49:17.036004
 log_msg()
 {
-    printf '%(%F %H:%M:%S)T %b' -1 "$1"
+    # printf '%(%F %H:%M:%S)T %b' -1 "$1"
+	printf '%(%F:%T)T.%06.0f' ${EPOCHREALTIME/./ }
+	printf " $1"
 }
 
 cleanup_and_killall()
@@ -62,6 +66,7 @@ is_if_present $ul_if
 # Output interfaces and configured rates
 log_msg "   Down interface: $dl_if ($min_dl_shaper_rate_kbps / $base_dl_shaper_rate_kbps / $max_dl_shaper_rate_kbps)\n"
 log_msg "     Up interface: $ul_if ($min_ul_shaper_rate_kbps / $base_ul_shaper_rate_kbps / $max_ul_shaper_rate_kbps)\n"
+log_msg "      Pinger rate: ${reflector_ping_interval_s} seconds\n"
 
 get_next_shaper_rate() 
 {
@@ -74,6 +79,8 @@ get_next_shaper_rate()
 	local -n t_last_bufferbloat_us=$7
 	local -n t_last_decay_us=$8
     local -n shaper_rate_kbps=$9
+
+    cur_shaper_rate_kbps=${shaper_rate_kbps} # remember the current so we can see if we got a new one
 
 	case $load_condition in
 
@@ -123,6 +130,11 @@ get_next_shaper_rate()
         # make sure to only return rates between cur_min_rate and cur_max_rate
         (($shaper_rate_kbps < $min_shaper_rate_kbps)) && shaper_rate_kbps=$min_shaper_rate_kbps;
         (($shaper_rate_kbps > $max_shaper_rate_kbps)) && shaper_rate_kbps=$max_shaper_rate_kbps;
+
+    if (($cur_shaper_rate_kbps != $shaper_rate_kbps)); then
+        (($output_cake_changes)) && log_msg "${load_condition} ${cur_shaper_rate_kbps} ${shaper_rate_kbps}\n"
+    fi
+
 }
 
 monitor_achieved_rates()
@@ -371,7 +383,7 @@ set_cake_rate()
 	local -n time_rate_set_us=$3
 	
 #	(($output_cake_changes)) && echo "tc qdisc change root dev ${interface} cake bandwidth ${shaper_rate_kbps}Kbit"
-	(($output_cake_changes)) && log_msg "${interface} ${shaper_rate_kbps}\n"
+	# (($output_cake_changes)) && log_msg "${interface} ${shaper_rate_kbps}\n"
 	
 	if (($debug)); then
 		tc qdisc change root dev $interface cake bandwidth ${shaper_rate_kbps}Kbit

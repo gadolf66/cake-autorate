@@ -3,13 +3,15 @@
 # See https://github.com/lynxthecat/sqm-autorate for details
 # https://www.shellcheck.net/ is your friend
 
-SRC_DIR="https://raw.githubusercontent.com/lynxthecat/CAKE-autorate/main/"
-# SRC_DIR="https://raw.githubusercontent.com/richb-hanover/cake-autorate/setup-script/"
+SRC_DIR="https://raw.githubusercontent.com/richb-hanover/cake-autorate/tweak-logging/"
+echo "WARNING: Reading from Development Directory"
+# SRC_DIR="https://raw.githubusercontent.com/lynxthecat/CAKE-autorate/main/"
 DOC_URL="https://github.com/lynxthecat/CAKE-autorate#installation-on-openwrt"
 
 # Retrieve required packages
-opkg update
-opkg install bash iputils-ping 
+# opkg update
+# opkg install bash iputils-ping 
+echo "WARNING: Skipping opkg updates!"
 
 # Set up CAKE-autorate files
 # cd to the /root directory

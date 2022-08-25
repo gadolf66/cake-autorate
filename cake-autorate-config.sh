@@ -83,7 +83,7 @@ shaper_rate_adjust_down_load_low=0.9      # how rapidly to return down to base s
 shaper_rate_adjust_up_load_low=1.01       # how rapidly to return up to base shaper rate upon idle or low load detected 
 
 # the load is categoried as low if < medium_load_thr, medium if > medium_load_thr and high if > high_load_thr relative to the current shaper rate
-medium_load_thr=0.75 # % of currently set bandwidth for detecting medium load
+medium_load_thr=0.50 # % of currently set bandwidth for detecting medium load
 high_load_thr=0.75   # % of currently set bandwidth for detecting high load
 
 # refractory periods between successive bufferbloat/decay rate changes
