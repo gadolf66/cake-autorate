@@ -6,6 +6,11 @@ bandwidth settings by measuring traffic load and RTT times.
 Read the [README](./README.md) file for more details.
 This is the history of changes.
 
+## 2022-08-25 - Version 1.0.1 
+
+- Log messages show dynamics of CAKE changes
+- Include timestamps with microsecond values
+
 ## 2022-08-21 - Version 1.0.0
 
 - New installer script - cake-autorate-setup.sh - now installs all required files 

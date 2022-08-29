@@ -20,6 +20,8 @@ cd /root/ || exit
 # create the cake-autorate directory if it's not present
 [[ -d cake-autorate ]] || mkdir cake-autorate
 
+printf "=== opkg successful ===\n"
+printf "\n"
 printf "Installing cake-autorate in /root/cake-autorate...\n"
 
 # cd into it

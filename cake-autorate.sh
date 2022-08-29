@@ -37,7 +37,7 @@ cleanup_and_killall()
 }
 
 # check to see if the named interface is present; exit if not
-is_if_present()
+is_if_configured()
 {
     the_if=$1
     is_here=$(ifconfig | grep "$the_if")
@@ -48,25 +48,6 @@ is_if_present()
     fi
 }
 
-install_dir="/root/cake-autorate/"
-
-. $install_dir"cake-autorate-config.sh"
-
-# test if stdout is a tty (terminal)
-[[ ! -t 1 ]] &&	exec &> /tmp/cake-autorate.log
-
-# ======= Start of the Main Routine ========
-
-log_msg "Starting CAKE-autorate $cake_autorate_version\n"
-
-# check if proper interfaces have been configured
-is_if_present $dl_if
-is_if_present $ul_if
-
-# Output interfaces and configured rates
-log_msg "   Down interface: $dl_if ($min_dl_shaper_rate_kbps / $base_dl_shaper_rate_kbps / $max_dl_shaper_rate_kbps)\n"
-log_msg "     Up interface: $ul_if ($min_ul_shaper_rate_kbps / $base_ul_shaper_rate_kbps / $max_ul_shaper_rate_kbps)\n"
-log_msg "      Pinger rate: ${reflector_ping_interval_s} seconds\n"
 
 get_next_shaper_rate() 
 {
@@ -131,9 +112,9 @@ get_next_shaper_rate()
         (($shaper_rate_kbps < $min_shaper_rate_kbps)) && shaper_rate_kbps=$min_shaper_rate_kbps;
         (($shaper_rate_kbps > $max_shaper_rate_kbps)) && shaper_rate_kbps=$max_shaper_rate_kbps;
 
-    if (($cur_shaper_rate_kbps != $shaper_rate_kbps)); then
-        (($output_cake_changes)) && log_msg "${load_condition} ${cur_shaper_rate_kbps} ${shaper_rate_kbps}\n"
-    fi
+    # if (($cur_shaper_rate_kbps != $shaper_rate_kbps)); then
+    #     (($output_cake_changes)) && log_msg "${load_condition} ${cur_shaper_rate_kbps} ${shaper_rate_kbps}\n"
+    # fi
 
 }
 
@@ -194,6 +175,12 @@ get_loads()
 
 classify_load()
 {
+	# Parameters:
+	# load_percent - %utilization for this direction
+	# achieved_rate_kbps - current kbps "achieved"
+	# load_codition - return value "dl" or "ul" followed by high | medium | low 
+	# 	and optionally "_bb" or "_sss"
+	#
 	# classify the load according to high/low/medium/idle and add _delayed if delayed
 	# thus ending up with high_delayed, low_delayed, etc.
 	local load_percent=$1
@@ -226,20 +213,28 @@ classify_load()
 
 monitor_reflector_responses() 
 {
-	# ping reflector, maintain baseline and output deltas to a common fifo
+	# Parameters:
+	# pinger - the pinger to check
+	# rtt_baseline_us - current baseline RTT for this pinger 
+	# 
+	# Read the fifo for a ping reflector
+	# Maintain baseline 
+	# Write deltas to a common fifo (/tmp/cake-autorate/ping_fifo)
 
 	local pinger=$1
-	local rtt_baseline_us=$2
+	local rtt_baseline_us=$2 
 
-	while read -r  timestamp _ _ _ reflector seq_rtt
+	# Read the designated pinger's fifo until it's empty
+	#   Get timestamp, reflector, and remainder of the line, ignoring three words in middle
+	while read -r  timestamp _ _ _ reflector seq_rtt 
 	do
 		# If no match then skip onto the next one
 		[[ $seq_rtt =~ icmp_[s|r]eq=([0-9]+).*time=([0-9]+)\.?([0-9]+)?[[:space:]]ms ]] || continue
 
-		seq=${BASH_REMATCH[1]}
+		seq=${BASH_REMATCH[1]}								# get the sequence number
 
-		rtt_us=${BASH_REMATCH[3]}000
-		rtt_us=$((${BASH_REMATCH[2]}000+10#${rtt_us:0:3}))
+		rtt_us=${BASH_REMATCH[3]}000 						# convert fraction into microseconds
+		rtt_us=$((${BASH_REMATCH[2]}000+10#${rtt_us:0:3}))	# combine the ms and the fraction to get us
 
 		reflector=${reflector//:/}
 
@@ -266,14 +261,17 @@ kill_pingers()
 	exit
 }
 
+# maintain_pingers - this separate process pings external reflectors ($reflectors)
+# and makes the resulting latency values available elsewhere (?)
+# 
 maintain_pingers()
 {
 	# this initiates the pingers and monitors reflector health, rotating reflectors as necessary
 
  	trap kill_pingers TERM
 
-	declare -A pinger_pids
-	declare -A rtt_baselines_us
+	declare -A pinger_pids				# array of pinger_pids
+	declare -A rtt_baselines_us			# array of rtt_baseline_us
 
 	reflector_offences_idx=0
 
@@ -300,6 +298,9 @@ maintain_pingers()
 	done
 
 	# Reflector health check loop - verifies reflectors have not gone stale and rotates reflectors as necessary
+	# Sample line from /tmp/cake-autorate/pinger_0_fifo
+	# 1661601024.393020] 64 bytes from 1.1.1.1: icmp_seq=313 ttl=58 time=12.2 ms
+	# 
 	while true
 	do
 		sleep_s $reflector_health_check_interval_s
@@ -383,7 +384,7 @@ set_cake_rate()
 	local -n time_rate_set_us=$3
 	
 #	(($output_cake_changes)) && echo "tc qdisc change root dev ${interface} cake bandwidth ${shaper_rate_kbps}Kbit"
-	# (($output_cake_changes)) && log_msg "${interface} ${shaper_rate_kbps}\n"
+	(($output_cake_changes)) && log_msg "${interface} ${shaper_rate_kbps}\n"
 	
 	if (($debug)); then
 		tc qdisc change root dev $interface cake bandwidth ${shaper_rate_kbps}Kbit
@@ -432,10 +433,15 @@ update_max_wire_packet_compensation()
 
 concurrent_read_positive_integer()
 {
-	# in the context of separate processes writing using > and reading form file
-        # it seems costly calls to the external flock binary can be avoided
-	# read either succeeds as expected or occassionally reads in bank value
+	# Parameters:
+	# value - integer to be returned
+	# path - to the file/fifo to read
+	#
+	# in the context of separate processes writing using > and reading from file
+	# it seems costly calls to the external flock binary can be avoided
+	# read either succeeds as expected or occassionally reads in blank value
 	# so just test for blank value and re-read until not blank
+	# 
 
 	local -n value=$1
  	local path=$2
@@ -471,6 +477,9 @@ verify_ifs_up()
 
 sleep_s()
 {
+	# Parameters:
+	# sleep_duration (in seconds)
+	# 
 	# calling external sleep binary is slow
 	# bash does have a loadable sleep 
 	# but read's timeout can more portably be exploited and this is apparently even faster anyway
@@ -482,6 +491,9 @@ sleep_s()
 
 sleep_us()
 {
+	# Parameters:
+	# sleep_duration_us (in microseconds)
+	# 
 	# calling external sleep binary is slow
 	# bash does have a loadable sleep 
 	# but read's timeout can more portably be exploited and this is apparently even fastera anyway
@@ -507,6 +519,19 @@ sleep_remaining_tick_time()
 	fi
 }
 
+# ======= Start of the Main Routine ========
+
+install_dir="/root/cake-autorate/"
+
+# include variables from the config file
+. $install_dir"cake-autorate-config.sh"
+
+# test if stdout is a tty (terminal) 
+# if not, output log messages to /tmp/cake-autorate.log
+[[ ! -t 1 ]] &&	exec &> /tmp/cake-autorate.log
+
+log_msg "Starting CAKE-autorate $cake_autorate_version\n"
+ 
 # Set up tmp directory, sleep fifo and perform various sanity checks
 
 # /tmp/cake-autorate/ is used to store temporary files
@@ -529,6 +554,15 @@ no_reflectors=${#reflectors[@]}
 
 # Check dl/if interface not the same
 [[ $dl_if == $ul_if ]] && { echo "Error: download interface and upload interface are both set to: '"$dl_if"', but cannot be the same. Exiting script."; exit; }
+
+# check if proper interfaces have been configured
+is_if_configured $dl_if
+is_if_configured $ul_if
+
+# Output interfaces and configured rates
+log_msg "   Down interface: $dl_if ($min_dl_shaper_rate_kbps / $base_dl_shaper_rate_kbps / $max_dl_shaper_rate_kbps)\n"
+log_msg "     Up interface: $ul_if ($min_ul_shaper_rate_kbps / $base_ul_shaper_rate_kbps / $max_ul_shaper_rate_kbps)\n"
+log_msg "      Pinger rate: ${reflector_ping_interval_s} seconds\n"
 
 # Check bufferbloat detection threshold not greater than window length
 (( $bufferbloat_detection_thr > $bufferbloat_detection_window )) && { echo "Error: bufferbloat_detection_thr cannot be greater than bufferbloat_detection_window. Exiting script."; exit; }
@@ -598,6 +632,7 @@ t_dl_last_decay_us=$t_start_us
 
 t_sustained_connection_idle_us=0
 
+# Initialize $delays[] to zero's - its length is the $bufferbloat_detection_window
 declare -a delays=( $(for i in {1..$bufferbloat_detection_window}; do echo 0; done) )
 delays_idx=0
 sum_delays=0
@@ -606,16 +641,16 @@ sum_delays=0
 mkfifo /tmp/cake-autorate/ping_fifo
 exec 4<> /tmp/cake-autorate/ping_fifo
 
+# ===== Start the process to maintian the pingers =====
 maintain_pingers &
 maintain_pingers_pid=$!
 
+# ===== Start the process to calculate the actual tx and rx data rates =====
 # Initiate achived rate monitor
-monitor_achieved_rates $rx_bytes_path $tx_bytes_path $monitor_achieved_rates_interval_us&
+monitor_achieved_rates $rx_bytes_path $tx_bytes_path $monitor_achieved_rates_interval_us &
 monitor_achieved_rates_pid=$!
 
 prev_timestamp=0
-
-# printf "Starting CAKE-autorate $cake_autorate_version using Down: $dl_if, Up: $ul_if\n"
 
 if (($debug)); then
 	if (( $bufferbloat_refractory_period_us <= ($bufferbloat_detection_window*$ping_response_interval_us) )); then
@@ -625,6 +660,12 @@ if (($debug)); then
 	fi
 fi
 
+# ===== Start the "main loop" =====
+#  
+# Read /tmp/cake-autorate/ping_fifo
+# Determine whether rtt_delta_us has changed enough to warrant changing CAKE parameters
+
+loop_count=0
 while true
 do
 	while read -t $global_ping_response_timeout_s -r timestamp reflector seq rtt_baseline_us rtt_us rtt_delta_us
@@ -651,8 +692,20 @@ do
 		dl_load_condition="dl_"$dl_load_condition
 		ul_load_condition="ul_"$ul_load_condition
 
+		dl_cur_rate=$dl_shaper_rate_kbps
+		ul_cur_rate=$ul_shaper_rate_kbps
+
 		get_next_shaper_rate $min_dl_shaper_rate_kbps $base_dl_shaper_rate_kbps $max_dl_shaper_rate_kbps $dl_achieved_rate_kbps $dl_load_condition $t_start_us t_dl_last_bufferbloat_us t_dl_last_decay_us dl_shaper_rate_kbps
 		get_next_shaper_rate $min_ul_shaper_rate_kbps $base_ul_shaper_rate_kbps $max_ul_shaper_rate_kbps $ul_achieved_rate_kbps $ul_load_condition $t_start_us t_ul_last_bufferbloat_us t_ul_last_decay_us ul_shaper_rate_kbps
+
+	    if (($dl_cur_rate != $dl_shaper_rate_kbps)); then
+	        (($output_cake_changes)) && log_msg "${dl_load_condition} ${dl_cur_rate} ${dl_shaper_rate_kbps} ${rtt_baseline_us} ${rtt_us} ${rtt_delta_us} ${delays_idx}\n"
+	    	loop_count=0
+	    fi
+	    if (($ul_cur_rate != $ul_shaper_rate_kbps)); then
+	        (($output_cake_changes)) && log_msg "${ul_load_condition} ${ul_cur_rate} ${ul_shaper_rate_kbps} ${rtt_baseline_us} ${rtt_us} ${rtt_delta_us} ${delays_idx}\n"
+	    	loop_count=0
+	    fi
 
 		(($output_processing_stats)) && printf '%s %-6s %-6s %-3s %-3s %s %-15s %-6s %-6s %-6s %-6s %-6s %s %-14s %-14s %-6s %-6s\n' $EPOCHREALTIME $dl_achieved_rate_kbps $ul_achieved_rate_kbps $dl_load_percent $ul_load_percent $timestamp $reflector $seq $rtt_baseline_us $rtt_us $rtt_delta_us $compensated_delay_thr_us $sum_delays $dl_load_condition $ul_load_condition $dl_shaper_rate_kbps $ul_shaper_rate_kbps
 
@@ -670,7 +723,17 @@ do
 		fi
 		t_end_us=${EPOCHREALTIME/./}
 
+		if [[ ($dl_cur_rate == $dl_shaper_rate_kbps) && ($ul_cur_rate == $ul_shaper_rate_kbps) ]]; then
+			loop_count=$loop_count+1
+		fi
+		if (( $loop_count > 30 )); then
+			(($output_cake_changes)) && log_msg "300 loops without change\n"
+			loop_count=0
+		fi
+
 	done</tmp/cake-autorate/ping_fifo
+
+	(($output_cake_changes)) && log_msg "Exited main loop - /tmp/cake-autorate/ping_fifo ran dry\n"
 
 	(($debug)) && {(( ${PIPESTATUS[0]} == 142 )) && echo "DEBUG Warning: global ping response timeout. Enforcing minimum shaper rates." || echo "DEBUG Connection idle. Enforcing minimum shaper rates.";}
 	
@@ -698,7 +761,7 @@ do
 		sleep_remaining_tick_time $t_start_us $reflector_ping_interval_us
 	done
 
-	# Start up ping processes
-	maintain_pingers &
-	maintain_pingers_pid=$!
+	# Start up ping processes 
+	# maintain_pingers & # Does this need to be done twice ?
+	# maintain_pingers_pid=$!
 done
