@@ -21,7 +21,7 @@ This routine starts pingers to several reflectors from the array
 `${reflectors}` to get a measure of the latency.
 Each of the reflectors has associated with it a PID,
 a fifo that records the output of the `ping` command,
-and a counter of `${reflector_offences?`
+and a counter of `${reflector_offences}` _(Not sure what "offences" are...)_
 
 This routine appears to be responsible for detecting a failure
 of a pinger and either ignoring it or substituting a new one.
@@ -38,10 +38,6 @@ of a pinger and either ignoring it or substituting a new one.
 1661601025.395062] 64 bytes from 1.1.1.1: icmp_seq=318 ttl=58 time=12.1 ms
 1661601025.595564] 64 bytes from 1.1.1.1: icmp_seq=319 ttl=58 time=12.2 ms
 ```
-maintains an array of "pinger_pids" -
-the PIDs of the individual ping processes that query
-each external reflector 
-
 
 ## monitor\_reflector\_responses()
 
@@ -70,10 +66,34 @@ root@Belkin-RT3200:/tmp/cake-autorate# tail ping_fifo
 417103] 8.8.8.8 101 15171 16400
 ```
 
+## "main loop"
 
-#### Questions:
+Reads `/tmp/cake-autorate/ping_fifo` and determine whether rtt_delta_us has changed enough to warrant changing CAKE parameters 
 
-1. Why compute delta before smoothing rtt\_baseline\_us?
+
+## Questions:
+
+1. I have the sense that the code compares a "current RTT" to some "longer-term RTT" and if the RTT is increasing it decreases 
+the CAKE parameters. Is that what's happening when bufferbloat_detected is assigned in the main loop?
+Which variable(s) hold the current latency/measurement that's
+being used for the comparison?
+
+2. Might it make sense to pass all the
+"$dl-related" and "$ul-related" variables
+as variables in an associative array? That is:
+
+   | Current Variable | Associative Array |
+   |------------|----------|
+   | `$dl_if` | `$dl[if]` |
+   |`$dl_load_condition`	|	`$dl[load_condition]` |
+   |`$dl_shaper_rate_kbps`	|	`$dl[shaper_rate_kbps]` |
+   | ... etc...	| 	... etc ... |
+
+   It then lets us simplify function calls like
+`classify_load ... $long $list $of $arguments...` to
+`classify_load $dl`
+
+3. In `monitor_reflector_responses`, why compute delta before smoothing rtt\_baseline\_us?
 
    ```
 		rtt_delta_us=$(( $rtt_us-$rtt_baseline_us ))
@@ -85,17 +105,11 @@ root@Belkin-RT3200:/tmp/cake-autorate# tail ping_fifo
 		printf '%s %s %s %s %s %s\n' "$timestamp" "$reflector" "$seq" "$rtt_baseline_us" "$rtt_us" "$rtt_delta_us" > /tmp/cake-autorate/ping_fifo
 ```
 
-2. Does this routine return rtt\_baseline\_us? Or does writing it to the shared fifo suffice?
+4. Does `monitor_reflector_responses` return `rtt_baseline_us`? Or does writing it to the shared fifo suffice?
 
-## "main loop"
+5. Should `medium_load_thr` be different from `high_load_thr` in _cake-autorate-config.sh_? (Both are set to 0.75 in main branch)
+6. Does `maintain_pingers` need to be called a second time near the end of the file?
+7. Maybe running as service should change to `output_processing_stats=0` & `output_cake_changes=0` by default...
+8. How can we test if `sustained_idle_sleep_thr_s` works?
+What conditions should cause pinging to stop?
 
-reads `/tmp/cake-autorate/ping_fifo` and determine whether rtt_delta_us has changed enough to warrant changing CAKE parameters (I guess...)
-
-## Other Questions
-
-1. Should `medium_load_thr` be different from `high_load_thr` in _cake-autorate-config.sh_? (Both are set to 0.75 in main branch)
-2. Does maintain\_pingers need to be called a second time at the end of the file?
-3. Should running as service change to `output_processing_stats=0` & `output_cake_changes=0` by default? 
-4. How test if `sustained_idle_sleep_thr_s` works? 
-5. Why not just set `delays[delay_idx]` to result of comparison
-and count up the number in a loop?
