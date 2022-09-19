@@ -103,7 +103,7 @@ as variables in an associative array? That is:
 		rtt_baseline_us=$(( ( (1000-$alpha)*$rtt_baseline_us+$alpha*$rtt_us )/1000 ))
 
 		printf '%s %s %s %s %s %s\n' "$timestamp" "$reflector" "$seq" "$rtt_baseline_us" "$rtt_us" "$rtt_delta_us" > /tmp/cake-autorate/ping_fifo
-```
+   ```
 
 4. Does `monitor_reflector_responses` return `rtt_baseline_us`? Or does writing it to the shared fifo suffice?
 
